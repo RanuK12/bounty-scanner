@@ -64,6 +64,10 @@ _DOLLAR_RE = re.compile(
         (?P<usd>\d{1,6}(?:,\d{3})*(?:\.\d{1,2})?) \s* USD
         |
         bounty \s* :? \s* \$? \s* (?P<bounty>\d{1,6}(?:,\d{3})*(?:\.\d{1,2})?)
+        |
+        reward \s* :? \s* \$? \s* (?P<reward>\d{1,6}(?:,\d{3})*(?:\.\d{1,2})?)
+        |
+        prize \s* :? \s* \$? \s* (?P<prize>\d{1,6}(?:,\d{3})*(?:\.\d{1,2})?)
     )
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -77,7 +81,13 @@ def parse_dollar_amount(text: str) -> Optional[int]:
     m = _DOLLAR_RE.search(text)
     if not m:
         return None
-    raw = m.group("dollar") or m.group("usd") or m.group("bounty")
+    raw = (
+        m.group("dollar")
+        or m.group("usd")
+        or m.group("bounty")
+        or m.group("reward")
+        or m.group("prize")
+    )
     if raw is None:
         return None
     # remove commas
@@ -93,11 +103,7 @@ def parse_dollar_amount(text: str) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 _HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "bounty-scanner/1.0",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
 }
@@ -121,6 +127,16 @@ def fetch_url(url: str, *, json_response: bool = False) -> Any:
 # Source parsers
 # ---------------------------------------------------------------------------
 
+def _fetch_issue_body(owner: str, repo: str, number: int) -> str:
+    """Fetch the body of a GitHub issue."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{number}"
+    try:
+        data = fetch_url(url, json_response=True)
+        return data.get("body", "") or ""
+    except requests.RequestException:
+        return ""
+
+
 def parse_github_issues() -> List[BountyItem]:
     """Fetch open issues with label:bounty from GitHub search API."""
     url = (
@@ -133,11 +149,20 @@ def parse_github_issues() -> List[BountyItem]:
     for issue in data.get("items", []):
         title = issue.get("title", "")
         html_url = issue.get("html_url", "")
-        repo_full = issue.get("repository_url", "").replace(
-            "https://api.github.com/repos/", ""
-        )
+        repo_url = issue.get("repository_url", "")
+        # Extract owner/repo from repository_url
+        # e.g., "https://api.github.com/repos/owner/repo"
+        repo_path = repo_url.replace("https://api.github.com/repos/", "")
+        parts = repo_path.split("/")
+        owner = parts[0] if len(parts) >= 2 else ""
+        repo = parts[1] if len(parts) >= 2 else ""
+        number = issue.get("number")
         labels = [lb["name"] for lb in issue.get("labels", [])]
-        body = issue.get("body", "") or ""
+
+        # Fetch full issue body
+        body = ""
+        if owner and repo and number:
+            body = _fetch_issue_body(owner, repo, number)
 
         # Determine status from labels
         status = BOUNTY_STATUS_AVAILABLE
