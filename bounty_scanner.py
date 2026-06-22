@@ -38,6 +38,13 @@ STATUS_COLORS: Dict[str, str] = {
     BOUNTY_STATUS_TAKEN: "red",
 }
 
+SOURCES_INFO: Dict[str, str] = {
+    "github": "https://github.com/search?q=label%3Abounty+state%3Aopen",
+    "algora": "https://app.algora.io/bounties (requires JS rendering)",
+    "opire": "https://opire.dev/bounties (currently unreachable)",
+    "warpspeed": "https://warpspeed.social or https://app.warpspeed.com (currently unreachable)",
+}
+
 
 @dataclass
 class BountyItem:
@@ -196,135 +203,126 @@ def parse_github_issues() -> List[BountyItem]:
 
 
 def parse_algora() -> List[BountyItem]:
-    """Scrape https://app.algora.io/bounties (public page)."""
-    url = "https://app.algora.io/bounties"
+    """Try to fetch bounties from Algora API. Falls back to JS rendering message."""
+    # Attempt API endpoint
+    api_url = "https://app.algora.io/api/bounties"
     try:
-        html = fetch_url(url)
+        data = fetch_url(api_url, json_response=True)
     except requests.RequestException as exc:
         print(f"  [red]Algora error:[/red] {exc}", file=sys.stderr)
+        print("  [yellow]Algora requires JS rendering, use --stealth to try with Camofox.[/yellow]", file=sys.stderr)
         return []
 
-    soup = BeautifulSoup(html, "html.parser")
-    items: List[BountyItem] = []
+    # The API currently returns HTML (sign-in page) rather than JSON.
+    # If it's not a dict, we cannot parse.
+    if not isinstance(data, dict):
+        print("  [yellow]Algora requires JS rendering, use --stealth to try with Camofox.[/yellow]", file=sys.stderr)
+        return []
 
-    # The page currently shows a sign-in wall, but we try to find any bounty cards.
-    # Look for elements that might contain bounty info.
-    for card in soup.select('[class*="bounty"], [class*="card"], [class*="item"]'):
-        title_el = card.select_one("h2, h3, h4, [class*=title]")
-        link_el = card.select_one("a[href]")
-        amount_el = card.select_one("[class*=amount], [class*=price], [class*=bounty]")
-        if not title_el:
-            continue
-        title = title_el.get_text(strip=True)
-        url_link = ""
-        if link_el:
-            href = link_el.get("href", "")
-            if href.startswith("/"):
-                href = "https://app.algora.io" + href
-            url_link = href
-        amount = None
-        if amount_el:
-            amount = parse_dollar_amount(amount_el.get_text(strip=True))
-        if amount is None:
-            amount = parse_dollar_amount(title)
-        items.append(
-            BountyItem(
-                source="Algora",
-                title=title,
-                bounty=amount,
-                url=url_link,
-                status=BOUNTY_STATUS_AVAILABLE,
-                tags=[],
-            )
-        )
-    return items
+    # If we ever get proper JSON, parse it here.
+    # For now, return empty.
+    return []
 
 
 def parse_opire() -> List[BountyItem]:
-    """Scrape https://opire.dev/bounties (public page)."""
-    url = "https://opire.dev/bounties"
-    try:
-        html = fetch_url(url)
-    except requests.RequestException as exc:
-        print(f"  [red]Opire error:[/red] {exc}", file=sys.stderr)
-        return []
-
-    soup = BeautifulSoup(html, "html.parser")
-    items: List[BountyItem] = []
-
-    # The page currently returns 404, but we try to find any bounty listings.
-    for card in soup.select('[class*="bounty"], [class*="card"], [class*="listing"]'):
-        title_el = card.select_one("h2, h3, h4, [class*=title]")
-        link_el = card.select_one("a[href]")
-        amount_el = card.select_one("[class*=amount], [class*=price], [class*=bounty]")
-        if not title_el:
+    """Try multiple URLs for Opire. Currently all return 404."""
+    urls_to_try = [
+        "https://opire.dev/bounties/open",
+        "https://opire.dev/api/bounties",
+        "https://opire.dev/explore",
+    ]
+    for url in urls_to_try:
+        try:
+            html = fetch_url(url)
+            # If we get a 200 response, try to parse
+            soup = BeautifulSoup(html, "html.parser")
+            # Check if page contains any bounty-like elements
+            cards = soup.select('[class*="bounty"], [class*="card"], [class*="listing"]')
+            if cards:
+                # parse as before (simplified)
+                items: List[BountyItem] = []
+                for card in cards:
+                    title_el = card.select_one("h2, h3, h4, [class*=title]")
+                    link_el = card.select_one("a[href]")
+                    amount_el = card.select_one("[class*=amount], [class*=price], [class*=bounty]")
+                    if not title_el:
+                        continue
+                    title = title_el.get_text(strip=True)
+                    url_link = ""
+                    if link_el:
+                        href = link_el.get("href", "")
+                        if href.startswith("/"):
+                            href = "https://opire.dev" + href
+                        url_link = href
+                    amount = None
+                    if amount_el:
+                        amount = parse_dollar_amount(amount_el.get_text(strip=True))
+                    if amount is None:
+                        amount = parse_dollar_amount(title)
+                    items.append(
+                        BountyItem(
+                            source="Opire",
+                            title=title,
+                            bounty=amount,
+                            url=url_link,
+                            status=BOUNTY_STATUS_AVAILABLE,
+                            tags=[],
+                        )
+                    )
+                return items
+        except requests.RequestException:
             continue
-        title = title_el.get_text(strip=True)
-        url_link = ""
-        if link_el:
-            href = link_el.get("href", "")
-            if href.startswith("/"):
-                href = "https://opire.dev" + href
-            url_link = href
-        amount = None
-        if amount_el:
-            amount = parse_dollar_amount(amount_el.get_text(strip=True))
-        if amount is None:
-            amount = parse_dollar_amount(title)
-        items.append(
-            BountyItem(
-                source="Opire",
-                title=title,
-                bounty=amount,
-                url=url_link,
-                status=BOUNTY_STATUS_AVAILABLE,
-                tags=[],
-            )
-        )
-    return items
+    # All URLs failed
+    print("  [red]Could not reach Opire, the URL may have changed.[/red]", file=sys.stderr)
+    return []
 
 
 def parse_warpspeed() -> List[BountyItem]:
-    """Scrape https://warpspeed.com/bounties (public page)."""
-    url = "https://warpspeed.com/bounties"
-    try:
-        html = fetch_url(url)
-    except requests.RequestException as exc:
-        print(f"  [red]Warpspeed error:[/red] {exc}", file=sys.stderr)
-        return []
-
-    soup = BeautifulSoup(html, "html.parser")
-    items: List[BountyItem] = []
-
-    for card in soup.select('[class*="bounty"], [class*="card"], [class*="listing"]'):
-        title_el = card.select_one("h2, h3, h4, [class*=title]")
-        link_el = card.select_one("a[href]")
-        amount_el = card.select_one("[class*=amount], [class*=price], [class*=bounty]")
-        if not title_el:
+    """Try multiple URLs for Warpspeed. Currently unreachable."""
+    urls_to_try = [
+        "https://warpspeed.social",
+        "https://app.warpspeed.com",
+    ]
+    for url in urls_to_try:
+        try:
+            html = fetch_url(url)
+            soup = BeautifulSoup(html, "html.parser")
+            cards = soup.select('[class*="bounty"], [class*="card"], [class*="listing"]')
+            if cards:
+                items: List[BountyItem] = []
+                for card in cards:
+                    title_el = card.select_one("h2, h3, h4, [class*=title]")
+                    link_el = card.select_one("a[href]")
+                    amount_el = card.select_one("[class*=amount], [class*=price], [class*=bounty]")
+                    if not title_el:
+                        continue
+                    title = title_el.get_text(strip=True)
+                    url_link = ""
+                    if link_el:
+                        href = link_el.get("href", "")
+                        if href.startswith("/"):
+                            href = url.rstrip("/") + href
+                        url_link = href
+                    amount = None
+                    if amount_el:
+                        amount = parse_dollar_amount(amount_el.get_text(strip=True))
+                    if amount is None:
+                        amount = parse_dollar_amount(title)
+                    items.append(
+                        BountyItem(
+                            source="Warpspeed",
+                            title=title,
+                            bounty=amount,
+                            url=url_link,
+                            status=BOUNTY_STATUS_AVAILABLE,
+                            tags=[],
+                        )
+                    )
+                return items
+        except requests.RequestException:
             continue
-        title = title_el.get_text(strip=True)
-        url_link = ""
-        if link_el:
-            href = link_el.get("href", "")
-            if href.startswith("/"):
-                href = "https://warpspeed.com" + href
-            url_link = href
-        amount = None
-        if amount_el:
-            amount = parse_dollar_amount(amount_el.get_text(strip=True))
-        if amount is None:
-            amount = parse_dollar_amount(title)
-        items.append(
-            BountyItem(
-                source="Warpspeed",
-                title=title,
-                bounty=amount,
-                url=url_link,
-                status=BOUNTY_STATUS_AVAILABLE,
-                tags=[],
-            )
-        )
-    return items
+    print("  [red]Could not reach Warpspeed, the URL may have changed.[/red]", file=sys.stderr)
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -422,11 +420,23 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Use Camofox proxy if available (not implemented).",
     )
+    parser.add_argument(
+        "--list-sources",
+        action="store_true",
+        help="Print available sources and their URLs and exit.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_args(argv)
+
+    if args.list_sources:
+        print("Available sources:")
+        for src, url in SOURCES_INFO.items():
+            print(f"  {src}: {url}")
+        return
+
     sources = [s.strip().lower() for s in args.sources.split(",") if s.strip()]
 
     # Map source names to parser functions
@@ -441,7 +451,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     for src in sources:
         parser_fn = parser_map.get(src)
         if parser_fn is None:
-            print(f"  [yellow]Unknown source '{src}', skipping.[/yellow]", file=sys.stderr)
+            print(f"  [yellow]Unknown source '{src}', skipping. Use --list-sources to see available sources.[/yellow]", file=sys.stderr)
             continue
         print(f"  Scanning {src}...", file=sys.stderr)
         try:
