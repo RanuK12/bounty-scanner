@@ -337,7 +337,7 @@ def filter_items(
     """Return items that satisfy the given filters."""
     result: List[BountyItem] = []
     for item in items:
-        if min_bounty is not None and (item.bounty is None or item.bounty < min_bounty):
+        if min_bounty is not None and min_bounty > 0 and (item.bounty is None or item.bounty < min_bounty):
             continue
         if tag_filter is not None:
             tag_lower = tag_filter.lower()
